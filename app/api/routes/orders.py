@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal
 from datetime import datetime
-
+from types import SimpleNamespace
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
@@ -146,12 +146,27 @@ def create_order(
     # Email failures never fail the order itself — the purchase already
     # succeeded in the database by this point; a notification email is a
     # side effect, not a condition of the order being valid.
+    # Snapshot everything the emails need as plain values now, while the
+    # session is still open — the background task runs after the response
+    # is sent, by which point the DB session (and any lazy-loaded
+    # attributes on `order`/`user`) may no longer be usable.
+    order_snapshot = SimpleNamespace(
+        id=order.id,
+        items=order.items,
+        total=order.total,
+        status=order.status,
+        shipping_name=order.shipping_name,
+        shipping_address=order.shipping_address,
+        shipping_city=order.shipping_city,
+    )
+    user_email = user.email
+
     def _send_order_emails():
         try:
-            send_order_confirmation_email(user.email, order)
-            send_admin_new_order_email(order)
+            send_order_confirmation_email(user_email, order_snapshot)
+            send_admin_new_order_email(order_snapshot)
         except Exception as e:
-            print(f"[orders] Notification email failed for order {order.id}: {e}")
+            print(f"[orders] Notification email failed for order {order_snapshot.id}: {e}")
 
     background_tasks.add_task(_send_order_emails)
 

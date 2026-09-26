@@ -30,10 +30,12 @@ def send_email(to: str, subject: str, html_body: str) -> bool:
         )
         response.raise_for_status()
         return True
+    except httpx.HTTPStatusError as e:
+        print(f"[email] Failed to send to {to}: {e.response.status_code} {e.response.text}")
+        return False
     except Exception as e:
         print(f"[email] Failed to send to {to}: {e}")
         return False
-
 
 def send_order_confirmation_email(user_email: str, order) -> None:
     items_html = "".join(

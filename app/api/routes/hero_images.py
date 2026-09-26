@@ -56,7 +56,6 @@ async def upload_hero_images(
         image_url = storage_service.save_bytes(raw_bytes, filename, resource_type="image")
 
         hero_image = HeroImage(image_url=image_url, placement=placement, sort_order=existing_count + i)
-        sort_order=existing_count + i)
         db.add(hero_image)
         created.append(hero_image)
 

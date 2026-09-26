@@ -193,8 +193,6 @@ async def create_product(
         voucher_code = voucher.code
 
     image_urls = _save_images(images, remove_bg=remove_bg)
-
-    image_urls = _save_images(images, remove_bg=remove_bg)
     video_url = _save_video(video)
 
     data = ProductCreate(

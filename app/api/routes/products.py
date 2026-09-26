@@ -5,7 +5,6 @@ import io
 from datetime import datetime, timedelta
 from collections import Counter
 
-from rembg import remove as rembg_remove
 from PIL import Image
 
 import httpx
@@ -81,6 +80,8 @@ async def analyze_product(
 
 
 def _strip_background(raw_bytes: bytes) -> bytes:
+    
+    from rembg import remove as rembg_remove
     """
     Runs the image through rembg's pretrained model entirely locally — no
     external API, no key, no account. Output is always PNG, since
@@ -163,7 +164,7 @@ async def create_product(
     tags: str = Form("[]"),  # JSON-encoded list, since multipart forms are flat key/value
     ai_generated: bool = Form(False),
     ai_flagged_needs_review: bool = Form(False),
-    remove_bg: bool = Form(True),
+    remove_bg: bool = Form(False),
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):

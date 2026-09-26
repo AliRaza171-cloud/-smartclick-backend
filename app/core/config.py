@@ -100,13 +100,18 @@ class Settings(BaseSettings):
     INTERNAL_AI_SERVICE_KEY: str = ""  # must match the AI service's INTERNAL_API_KEY exactly
     AI_SERVICE_TIMEOUT_SECONDS: float = 35.0
 
-    # --- Local file storage (Phase 5) ---
-    # Simplification for development: product images save to local disk and
-    # are served as static files. Swap for S3/Cloudflare R2 before deploying
-    # anywhere beyond localhost — local disk storage doesn't survive a
-    # redeploy on most hosts and doesn't scale past one server.
+    # --- Local file storage (Phase 5, dev only) ---
     UPLOAD_DIR: str = "uploads"
     MAX_PRODUCT_IMAGES: int = 6
+
+    # --- Cloudinary (persistent image/video storage for deployment) ---
+    CLOUDINARY_CLOUD_NAME: str = ""
+    CLOUDINARY_API_KEY: str = ""
+    CLOUDINARY_API_SECRET: str = ""
+
+    @property
+    def use_cloudinary(self) -> bool:
+        return bool(self.CLOUDINARY_CLOUD_NAME)
 
     @property
     def is_production(self) -> bool:

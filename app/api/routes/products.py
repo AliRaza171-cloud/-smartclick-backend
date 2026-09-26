@@ -21,6 +21,7 @@ from app.models.category import Category
 from app.models.order import Order, OrderStatus
 from app.models.review import Review
 from app.models.analytics import AnalyticsEvent
+from app.services import storage_service
 from app.schemas.product import ProductCreate, ProductOut, ProductUpdate
 from app.models.order import Order, OrderStatus
 
@@ -103,7 +104,7 @@ def _save_images(images: list[UploadFile], remove_bg: bool = True) -> list[str]:
             status.HTTP_400_BAD_REQUEST, f"Too many images — max {settings.MAX_PRODUCT_IMAGES}."
         )
 
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    
     urls = []
     for image in images:
         if image.content_type not in ALLOWED_CONTENT_TYPES:
@@ -124,12 +125,8 @@ def _save_images(images: list[UploadFile], remove_bg: bool = True) -> list[str]:
             ext = os.path.splitext(image.filename or "")[1] or ".jpg"
 
         filename = f"{uuid.uuid4().hex}{ext}"
-        path = os.path.join(settings.UPLOAD_DIR, filename)
-        with open(path, "wb") as f:
-            f.write(raw_bytes)
-        urls.append(f"/static/{filename}")
+        urls.append(storage_service.save_bytes(raw_bytes, filename, resource_type="image"))
     return urls
-
 
 ALLOWED_VIDEO_CONTENT_TYPES = {"video/mp4", "video/webm", "video/quicktime"}
 

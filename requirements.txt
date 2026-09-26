@@ -18,3 +18,4 @@ safepay-python
 rembg
 pillow
 onnxruntime
+cloudinary

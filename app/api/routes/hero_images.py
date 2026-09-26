@@ -9,6 +9,7 @@ from app.api.deps import require_admin, get_db
 from app.models.hero_image import HeroImage
 from app.schemas.hero_image import HeroImageOut
 from app.api.routes.products import _strip_background, ALLOWED_CONTENT_TYPES
+from app.services import storage_service
 
 router = APIRouter(prefix="/hero-images", tags=["hero-images"])
 
@@ -31,7 +32,6 @@ async def upload_hero_images(
     if placement not in ("carousel", "strip"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, 'placement must be "carousel" or "strip".')
 
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     existing_count = db.query(HeroImage).filter(HeroImage.placement == placement).count()
     created = []
 
@@ -52,13 +52,11 @@ async def upload_hero_images(
                 ext = os.path.splitext(image.filename or "")[1] or ".jpg"
         else:
             ext = os.path.splitext(image.filename or "")[1] or ".jpg"
-
         filename = f"{uuid.uuid4().hex}{ext}"
-        path = os.path.join(settings.UPLOAD_DIR, filename)
-        with open(path, "wb") as f:
-            f.write(raw_bytes)
+        image_url = storage_service.save_bytes(raw_bytes, filename, resource_type="image")
 
-        hero_image = HeroImage(image_url=f"/static/{filename}", placement=placement, sort_order=existing_count + i)
+        hero_image = HeroImage(image_url=image_url, placement=placement, sort_order=existing_count + i)
+        sort_order=existing_count + i)
         db.add(hero_image)
         created.append(hero_image)
 
@@ -70,5 +68,8 @@ async def upload_hero_images(
 
 @router.delete("/{hero_image_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_hero_image(hero_image_id: str, _admin=Depends(require_admin), db: Session = Depends(get_db)):
+    hero_image = db.query(HeroImage).filter(HeroImage.id == hero_image_id).first()
+    if hero_image:
+        storage_service.delete_by_url(hero_image.image_url)
     db.query(HeroImage).filter(HeroImage.id == hero_image_id).delete()
     db.commit()

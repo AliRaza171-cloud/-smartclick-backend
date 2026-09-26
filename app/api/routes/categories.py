@@ -11,6 +11,7 @@ from app.models.user import User
 from app.models.category import Category
 from app.schemas.category import CategoryCreate, CategoryOut
 from app.api.routes.products import ALLOWED_CONTENT_TYPES
+from app.services import storage_service
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 
@@ -70,14 +71,9 @@ async def set_category_image(
             f"Unsupported file type: {image.content_type}. Use JPEG, PNG, or WebP.",
         )
 
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     ext = os.path.splitext(image.filename or "")[1] or ".jpg"
     filename = f"{uuid.uuid4().hex}{ext}"
-    path = os.path.join(settings.UPLOAD_DIR, filename)
-    with open(path, "wb") as f:
-        f.write(await image.read())
-
-    category.image_url = f"/static/{filename}"
+    category.image_url = storage_service.save_bytes(await image.read(), filename, resource_type="image")
     db.commit()
     db.refresh(category)
     return category

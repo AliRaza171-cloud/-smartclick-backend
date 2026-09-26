@@ -1,11 +1,8 @@
 import os
 import uuid
 import json
-import io
 from datetime import datetime, timedelta
 from collections import Counter
-
-from PIL import Image
 
 import httpx
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends
@@ -22,7 +19,6 @@ from app.models.review import Review
 from app.models.analytics import AnalyticsEvent
 from app.services import storage_service
 from app.schemas.product import ProductCreate, ProductOut, ProductUpdate
-from app.models.order import Order, OrderStatus
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -35,23 +31,10 @@ async def analyze_product(
     _admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """
-    Proxies to the AI Agent service (Phase 4). Only admins can call this —
-    it's the seller-side listing tool, not a public endpoint.
-
-    On any failure (service down, timeout, bad response) this returns a
-    clean 503 rather than crashing the request — the frontend's job is to
-    fall back to letting the seller fill the listing in manually, since an
-    AI outage should never block someone from creating a product.
-    """
     files = [
         ("images", (image.filename, await image.read(), image.content_type))
         for image in images
     ]
-
-    # The current category list lives in the database now, not a fixed list
-    # baked into the AI service — it's sent fresh on every call so a
-    # newly-added category is immediately something the model can pick.
     category_names = [c.name for c in db.query(Category).all()]
 
     try:
@@ -79,25 +62,7 @@ async def analyze_product(
     return response.json()
 
 
-def _strip_background(raw_bytes: bytes) -> bytes:
-    
-    from rembg import remove as rembg_remove
-    """
-    Runs the image through rembg's pretrained model entirely locally — no
-    external API, no key, no account. Output is always PNG, since
-    transparency can't be represented in JPEG.
-    """
-    result = rembg_remove(raw_bytes)
-    if isinstance(result, bytes):
-        img = Image.open(io.BytesIO(result)).convert("RGBA")
-    else:
-        img = result.convert("RGBA")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def _save_images(images: list[UploadFile], remove_bg: bool = True) -> list[str]:
+def _save_images(images: list[UploadFile]) -> list[str]:
     if not images:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "At least one image is required.")
     if len(images) > settings.MAX_PRODUCT_IMAGES:
@@ -105,7 +70,6 @@ def _save_images(images: list[UploadFile], remove_bg: bool = True) -> list[str]:
             status.HTTP_400_BAD_REQUEST, f"Too many images — max {settings.MAX_PRODUCT_IMAGES}."
         )
 
-    
     urls = []
     for image in images:
         if image.content_type not in ALLOWED_CONTENT_TYPES:
@@ -114,17 +78,7 @@ def _save_images(images: list[UploadFile], remove_bg: bool = True) -> list[str]:
                 f"Unsupported file type: {image.content_type}. Use JPEG, PNG, or WebP.",
             )
         raw_bytes = image.file.read()
-
-        if remove_bg:
-            try:
-                raw_bytes = _strip_background(raw_bytes)
-                ext = ".png"
-            except Exception as e:
-                print(f"[products] Background removal failed, keeping original: {e}")
-                ext = os.path.splitext(image.filename or "")[1] or ".jpg"
-        else:
-            ext = os.path.splitext(image.filename or "")[1] or ".jpg"
-
+        ext = os.path.splitext(image.filename or "")[1] or ".jpg"
         filename = f"{uuid.uuid4().hex}{ext}"
         urls.append(storage_service.save_bytes(raw_bytes, filename, resource_type="image"))
     return urls
@@ -161,19 +115,12 @@ async def create_product(
     discount_pct: int | None = Form(None),
     free_shipping: bool = Form(False),
     voucher_code: str | None = Form(None),
-    tags: str = Form("[]"),  # JSON-encoded list, since multipart forms are flat key/value
+    tags: str = Form("[]"),
     ai_generated: bool = Form(False),
     ai_flagged_needs_review: bool = Form(False),
-    remove_bg: bool = Form(False),
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """
-    Publishes a real listing. This is deliberately a SEPARATE call from
-    /analyze — the AI draft is never auto-published; the admin/seller must
-    have reviewed and, if needed, edited every field before this call is
-    made from the frontend.
-    """
     try:
         tags_list = json.loads(tags)
         if not isinstance(tags_list, list):
@@ -193,7 +140,7 @@ async def create_product(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"No voucher with code {voucher_code}.")
         voucher_code = voucher.code
 
-    image_urls = _save_images(images, remove_bg=remove_bg)
+    image_urls = _save_images(images)
     video_url = _save_video(video)
 
     data = ProductCreate(
@@ -307,22 +254,10 @@ def get_product_badges(db: Session = Depends(get_db)):
     return badges
 @router.get("/admin/all", response_model=list[ProductOut])
 def list_all_products_admin(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """
-    Admin-only — includes deactivated products too, unlike the public
-    GET /products above which only ever shows active listings. This is
-    what the admin product-management page uses to show everything,
-    including things toggled off.
-    """
     return db.query(Product).order_by(Product.created_at.desc()).all()
 
 @router.get("/best-sellers", response_model=list[ProductOut])
 def best_sellers(limit: int = 10, db: Session = Depends(get_db)):
-    """
-    Ranked by actual quantity sold across PAID orders — real sales, not
-    views or cart-adds. Order.items is a JSONB snapshot (not a normalized
-    table), so this tallies in Python rather than SQL aggregation; fine at
-    this store's scale.
-    """
     paid_orders = db.query(Order).filter(Order.status == OrderStatus.paid).all()
 
     quantity_by_product: dict[str, int] = {}
@@ -334,8 +269,6 @@ def best_sellers(limit: int = 10, db: Session = Depends(get_db)):
     ranked_ids = sorted(quantity_by_product, key=lambda pid: quantity_by_product[pid], reverse=True)[:limit]
 
     if not ranked_ids:
-        # No sales yet — fall back to newest active listings so the
-        # storefront still has something to show.
         return (
             db.query(Product)
             .filter(Product.is_active == True)  # noqa: E712
@@ -352,9 +285,6 @@ def get_product(product_id: str, db: Session = Depends(get_db)):
     try:
         uuid.UUID(product_id)
     except ValueError:
-        # Not a real UUID at all (e.g. an old placeholder id like "1") —
-        # a clean 404 instead of letting an invalid value hit the database
-        # and crash with a raw SQL error.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found.")
 
     product = db.query(Product).filter(Product.id == product_id, Product.is_active == True).first()  # noqa: E712

@@ -1,36 +1,34 @@
-import smtplib
-import ssl
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import httpx
 
 from app.core.config import settings
 
 
 def send_email(to: str, subject: str, html_body: str) -> bool:
     """
-    Sends a real email via SMTP. Returns False (never raises) on failure —
-    email is a side effect, not something that should ever take down the
-    request that triggered it (an order still succeeds even if the
-    confirmation email fails to send; that's logged, not fatal).
+    Sends a real email via the Resend HTTP API. Returns False (never raises)
+    on failure — email is a side effect, not something that should ever take
+    down the request that triggered it.
     """
-    if not settings.SMTP_HOST:
-        # No SMTP configured — fall back to printing, same as the original
-        # dev stub, so local development still works without real credentials.
+    if not settings.RESEND_API_KEY:
+        # No Resend key configured — fall back to printing, same as the
+        # original dev stub, so local development still works without
+        # real credentials.
         print(f"[dev] Email to {to}: {subject}\n{html_body}")
         return True
 
-    message = MIMEMultipart("alternative")
-    message["Subject"] = subject
-    message["From"] = settings.FROM_EMAIL
-    message["To"] = to
-    message.attach(MIMEText(html_body, "html"))
-
     try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
-            server.starttls(context=context)
-            server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-            server.sendmail(settings.FROM_EMAIL, to, message.as_string())
+        response = httpx.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}"},
+            json={
+                "from": settings.FROM_EMAIL,
+                "to": [to],
+                "subject": subject,
+                "html": html_body,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
         return True
     except Exception as e:
         print(f"[email] Failed to send to {to}: {e}")

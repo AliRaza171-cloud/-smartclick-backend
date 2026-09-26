@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     SMTP_USERNAME: str = ""
     SMTP_PASSWORD: str = ""
     FROM_EMAIL: str = "noreply@smartclick.local"
+    RESEND_API_KEY: str = ""
     ADMIN_NOTIFICATION_EMAIL: str = ""  # where "new order" emails go
 
     # --- AI Agent service (separate FastAPI service, Phase 4) ---

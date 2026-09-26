@@ -2,7 +2,7 @@ import uuid
 from decimal import Decimal
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db, require_admin
@@ -42,7 +42,12 @@ def _unit_price(product: Product) -> Decimal:
 
 
 @router.post("", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
-def create_order(data: OrderCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def create_order(
+    data: OrderCreate,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     Every price here is recalculated server-side from the database — the
     cart on the frontend is just a list of (product_id, quantity); a client
@@ -141,11 +146,14 @@ def create_order(data: OrderCreate, user: User = Depends(get_current_user), db: 
     # Email failures never fail the order itself — the purchase already
     # succeeded in the database by this point; a notification email is a
     # side effect, not a condition of the order being valid.
-    try:
-        send_order_confirmation_email(user.email, order)
-        send_admin_new_order_email(order)
-    except Exception as e:
-        print(f"[orders] Notification email failed for order {order.id}: {e}")
+    def _send_order_emails():
+        try:
+            send_order_confirmation_email(user.email, order)
+            send_admin_new_order_email(order)
+        except Exception as e:
+            print(f"[orders] Notification email failed for order {order.id}: {e}")
+
+    background_tasks.add_task(_send_order_emails)
 
     try:
         notify_admins_new_order(db, order)

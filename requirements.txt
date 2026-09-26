@@ -15,7 +15,4 @@ python-multipart==0.0.9
 email-validator==2.2.0
 stripe==10.12.0
 safepay-python
-rembg
-pillow
-onnxruntime
 cloudinary

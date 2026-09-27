@@ -102,6 +102,11 @@ class Settings(BaseSettings):
     AI_SERVICE_TIMEOUT_SECONDS: float = 35.0
 
     LISTING_API_KEY: str = ""
+    # One-click connect from Listing Agent (admin approves on /listing-agent/connect).
+    LISTING_API_CONNECT: bool = True
+    LISTING_API_SIGNING_SECRET: str = ""       # empty = use JWT_SECRET_KEY
+    LISTING_API_REVOKED: str = ""              # comma-separated key ids to block
+    LISTING_API_CREATE_CATEGORIES: bool = True # new category names from Listing Agent are created
 
     # --- Local file storage (Phase 5, dev only) ---
     UPLOAD_DIR: str = "uploads"

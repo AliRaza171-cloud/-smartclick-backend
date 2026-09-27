@@ -53,6 +53,7 @@ app.include_router(questions.router)
 app.include_router(campaigns.router)
 app.include_router(newsletter.router)
 app.include_router(listing_api.router)
+app.include_router(listing_api.connect_router)
 
 # Local dev image storage — see UPLOAD_DIR in core/config.py for why this
 # gets swapped for real object storage before deploying anywhere.

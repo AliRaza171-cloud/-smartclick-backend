@@ -11,20 +11,34 @@ as the X-Api-Key header, instead of an admin login.
 
 Products created here are marked ai_generated. "draft" mode creates them with
 is_active = false, so they stay hidden from the storefront until an admin
-switches them on in Admin > Products.
+switches them on in Admin > Products. A category that doesn't exist yet is
+created (LISTING_API_CREATE_CATEGORIES), so products land where they belong.
 
-Leave LISTING_API_KEY empty to switch the whole API off.
+Keys: the fixed LISTING_API_KEY from .env, or a key issued by one-click connect:
+    POST /listing-api/connect   (admin login) {state, callback_url}
+The admin approves on the website's /listing-agent/connect page; this backend then
+creates a key ("lak_<id>.<signature>", signed with LISTING_API_SIGNING_SECRET or the
+JWT secret, so no database table is needed) and sends it to Listing Agent's callback.
+Revoke one key by adding its <id> to LISTING_API_REVOKED; changing the signing secret
+revokes them all. LISTING_API_CONNECT=false turns one-click connect off.
 """
+import hashlib
 import hmac
 import json
 import os
+import secrets
 import uuid
 from decimal import Decimal, InvalidOperation
+from urllib.parse import urlsplit
 
+import httpx
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
+from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_admin
+from app.api.routes.categories import _slugify
 from app.core.config import settings
 from app.models.category import Category
 from app.models.product import Product
@@ -35,12 +49,36 @@ ALLOWED_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 
+def _signing_secret() -> bytes:
+    return (settings.LISTING_API_SIGNING_SECRET or settings.JWT_SECRET_KEY).encode()
+
+
+def _signature(key_id: str) -> str:
+    return hmac.new(_signing_secret(), f"listing-api:{key_id}".encode(), hashlib.sha256).hexdigest()[:40]
+
+
+def issue_key() -> str:
+    key_id = secrets.token_hex(8)
+    return f"lak_{key_id}.{_signature(key_id)}"
+
+
+def _issued_key_ok(key: str) -> bool:
+    if not settings.LISTING_API_CONNECT or not key.startswith("lak_") or "." not in key:
+        return False
+    key_id, sig = key[4:].split(".", 1)
+    revoked = {k.strip() for k in settings.LISTING_API_REVOKED.split(",") if k.strip()}
+    return key_id not in revoked and hmac.compare_digest(sig.encode(), _signature(key_id).encode())
+
+
 def require_listing_key(x_api_key: str | None = Header(default=None)) -> None:
     expected = settings.LISTING_API_KEY
-    if not expected:
+    if not expected and not settings.LISTING_API_CONNECT:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "The Listing API is turned off on this store.")
-    if not x_api_key or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key.")
+    if x_api_key and expected and hmac.compare_digest(x_api_key.encode(), expected.encode()):
+        return
+    if x_api_key and _issued_key_ok(x_api_key):
+        return
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key.")
 
 
 router = APIRouter(prefix="/listing-api", tags=["listing-api"], dependencies=[Depends(require_listing_key)])
@@ -59,12 +97,22 @@ def _owner(db: Session) -> User:
 
 
 def _category(db: Session, wanted: str | None) -> tuple[str, bool]:
-    """-> (category name, matched). Unknown or missing names fall back to the first
-    category and the product is flagged for review, so a publish never fails on this."""
-    if wanted:
-        match = db.query(Category).filter(Category.name.ilike(wanted.strip())).first()
+    """-> (category name, matched). An existing category is matched by name (any case);
+    a new name is created as a category (LISTING_API_CREATE_CATEGORIES). Only when no name
+    is given (or creating is off) does it fall back to the first category, flagged for review."""
+    name = " ".join(str(wanted or "").split())[:60]
+    if name:
+        match = db.query(Category).filter(func.lower(Category.name) == name.lower()).first()
         if match:
             return match.name, True
+        if settings.LISTING_API_CREATE_CATEGORIES:
+            slug, base, n = _slugify(name), _slugify(name), 2
+            while db.query(Category).filter(Category.slug == slug).first():
+                slug, n = f"{base}-{n}", n + 1
+            last = db.query(func.max(Category.sort_order)).scalar() or 0
+            db.add(Category(name=name, slug=slug, sort_order=last + 1))
+            db.flush()
+            return name, True
     first = db.query(Category).order_by(Category.sort_order, Category.name).first()
     if not first:
         raise HTTPException(status.HTTP_409_CONFLICT, "This store has no categories yet — add one in Admin > Categories.")
@@ -198,3 +246,38 @@ async def update_product(
         storage_service.delete_by_url(url)
     return {"id": str(product.id), "url": _product_url(product.id),
             "status": "live" if product.is_active else "draft", "category": category}
+
+
+# ---------------------------------------------------------------- one-click connect
+
+connect_router = APIRouter(prefix="/listing-api/connect", tags=["listing-api"])
+
+
+class ConnectIn(BaseModel):
+    state: str = Field(min_length=8, max_length=100)
+    callback_url: str = Field(min_length=10, max_length=500)
+
+
+@connect_router.post("")
+async def approve_connection(data: ConnectIn, _admin=Depends(require_admin)):
+    """An admin clicked Approve on /listing-agent/connect: create a key and hand it to Listing Agent."""
+    if not settings.LISTING_API_CONNECT:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "One-click connect is turned off on this store.")
+    target = urlsplit(data.callback_url)
+    local = target.scheme == "http" and target.hostname in ("localhost", "127.0.0.1")
+    if not target.hostname or not (target.scheme == "https" or local):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "The connect link is invalid (callback must be https).")
+    key = issue_key()
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(data.callback_url, json={"state": data.state, "api_key": key,
+                                                           "store_name": settings.STORE_NAME})
+    except httpx.HTTPError:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Couldn't reach Listing Agent. Try again in a minute.")
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("detail") or r.text[:200]
+        except ValueError:
+            detail = r.text[:200]
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Listing Agent didn't accept the connection: {detail}")
+    return {"ok": True}

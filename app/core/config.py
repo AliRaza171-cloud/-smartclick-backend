@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     INTERNAL_AI_SERVICE_KEY: str = ""  # must match the AI service's INTERNAL_API_KEY exactly
     AI_SERVICE_TIMEOUT_SECONDS: float = 35.0
 
+    LISTING_API_KEY: str = ""
+
     # --- Local file storage (Phase 5, dev only) ---
     UPLOAD_DIR: str = "uploads"
     MAX_PRODUCT_IMAGES: int = 6

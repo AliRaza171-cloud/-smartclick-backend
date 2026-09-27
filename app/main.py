@@ -16,7 +16,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
 from app.middleware.security import SecurityHeadersMiddleware, CSRFMiddleware
-from app.api.routes import auth, products, vouchers, orders, categories, store, notifications, payments, wishlist, analytics, hero_images, reviews, questions, campaigns, newsletter
+from app.api.routes import auth, products, vouchers, orders, categories, store, notifications, payments, wishlist, analytics, hero_images, reviews, questions, campaigns, newsletter, listing_api
 
 app = FastAPI(title=settings.APP_NAME)
 
@@ -52,6 +52,7 @@ app.include_router(reviews.router)
 app.include_router(questions.router)
 app.include_router(campaigns.router)
 app.include_router(newsletter.router)
+app.include_router(listing_api.router)
 
 # Local dev image storage — see UPLOAD_DIR in core/config.py for why this
 # gets swapped for real object storage before deploying anywhere.

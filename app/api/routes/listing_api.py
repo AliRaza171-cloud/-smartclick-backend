@@ -260,7 +260,12 @@ class ConnectIn(BaseModel):
 
 @connect_router.post("")
 async def approve_connection(data: ConnectIn, _admin=Depends(require_admin)):
-    """An admin clicked Approve on /listing-agent/connect: create a key and hand it to Listing Agent."""
+    """An admin clicked Approve on /listing-agent/connect: create a key and hand it to Listing Agent.
+
+    Normally this server posts the key to Listing Agent's callback. When Listing Agent runs on the
+    admin's own PC (callback on localhost), a hosted server like Render can't reach it — so the key
+    goes back to the admin's browser (they're a logged-in admin) with {"deliver": "browser"}, and
+    the approval page submits it to the callback itself. Same if this server can't reach it at all."""
     if not settings.LISTING_API_CONNECT:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "One-click connect is turned off on this store.")
     target = urlsplit(data.callback_url)
@@ -268,12 +273,15 @@ async def approve_connection(data: ConnectIn, _admin=Depends(require_admin)):
     if not target.hostname or not (target.scheme == "https" or local):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "The connect link is invalid (callback must be https).")
     key = issue_key()
+    payload = {"state": data.state, "api_key": key, "store_name": settings.STORE_NAME}
+    browser = {"deliver": "browser", "callback_url": data.callback_url, **payload}
+    if local:
+        return browser
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(data.callback_url, json={"state": data.state, "api_key": key,
-                                                           "store_name": settings.STORE_NAME})
+            r = await client.post(data.callback_url, json=payload)
     except httpx.HTTPError:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Couldn't reach Listing Agent. Try again in a minute.")
+        return browser
     if r.status_code >= 400:
         try:
             detail = r.json().get("detail") or r.text[:200]

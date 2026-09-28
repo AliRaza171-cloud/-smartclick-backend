@@ -90,7 +90,8 @@ from app.core.config import settings
 from app.api.deps import require_admin, get_db
 from app.models.user import User
 from app.models.category import Category
-from app.schemas.category import CategoryCreate, CategoryOut, CategoryReorder
+from app.models.product import Product
+from app.schemas.category import CategoryCreate, CategoryOut, CategoryReorder, CategoryUpdate
 from app.api.routes.products import ALLOWED_CONTENT_TYPES
 from app.services import storage_service
 
@@ -157,6 +158,106 @@ def reorder_categories(
 
     db.commit()
     return db.query(Category).order_by(Category.sort_order, Category.name).all()
+
+
+@router.patch("/{slug}", response_model=CategoryOut)
+def update_category(
+    slug: str,
+    data: CategoryUpdate,
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Rename a category (and/or change its tagline).
+
+    Products refer to their category by name, so a rename moves every product in it
+    to the new name in the same transaction. The slug (the /category/<slug> web
+    address) is rebuilt from the new name so it keeps matching.
+    """
+    category = db.query(Category).filter(Category.slug == slug).first()
+    if not category:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Category not found.")
+
+    fields = data.model_dump(exclude_unset=True)
+
+    new_name = fields.get("name")
+    if new_name is not None and new_name != category.name:
+        clash = (
+            db.query(Category)
+            .filter(func.lower(Category.name) == new_name.lower(), Category.id != category.id)
+            .first()
+        )
+        if clash:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"A category called '{clash.name}' already exists.")
+
+        old_name = category.name
+        db.query(Product).filter(Product.category == old_name).update(
+            {Product.category: new_name}, synchronize_session=False
+        )
+        category.name = new_name
+
+        base = _slugify(new_name)
+        new_slug, suffix = base, 2
+        while db.query(Category).filter(Category.slug == new_slug, Category.id != category.id).first():
+            new_slug = f"{base}-{suffix}"
+            suffix += 1
+        category.slug = new_slug
+
+    if "tagline" in fields:
+        category.tagline = fields["tagline"] or None
+
+    db.commit()
+    db.refresh(category)
+    return category
+
+
+@router.patch("/{slug}", response_model=CategoryOut)
+def update_category(
+    slug: str,
+    data: CategoryUpdate,
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Rename a category (and/or change its tagline).
+
+    Products refer to their category by name, so a rename moves every product in it
+    to the new name in the same transaction. The slug (the /category/<slug> web
+    address) is rebuilt from the new name so it keeps matching.
+    """
+    category = db.query(Category).filter(Category.slug == slug).first()
+    if not category:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Category not found.")
+
+    fields = data.model_dump(exclude_unset=True)
+
+    new_name = fields.get("name")
+    if new_name is not None and new_name != category.name:
+        clash = (
+            db.query(Category)
+            .filter(func.lower(Category.name) == new_name.lower(), Category.id != category.id)
+            .first()
+        )
+        if clash:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"A category called '{clash.name}' already exists.")
+
+        old_name = category.name
+        db.query(Product).filter(Product.category == old_name).update(
+            {Product.category: new_name}, synchronize_session=False
+        )
+        category.name = new_name
+
+        base = _slugify(new_name)
+        new_slug, suffix = base, 2
+        while db.query(Category).filter(Category.slug == new_slug, Category.id != category.id).first():
+            new_slug = f"{base}-{suffix}"
+            suffix += 1
+        category.slug = new_slug
+
+    if "tagline" in fields:
+        category.tagline = fields["tagline"] or None
+
+    db.commit()
+    db.refresh(category)
+    return category
 
 
 @router.patch("/{slug}/image", response_model=CategoryOut)
